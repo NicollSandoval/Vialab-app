@@ -220,29 +220,31 @@ with tab_sev:
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab_mapa:
     st.subheader("Mapa de riesgo de ocurrencia por comuna")
-    st.caption("Predice para todas las comunas con las condiciones seleccionadas")
+    st.caption("Predice para todas las comunas y franjas con las condiciones seleccionadas")
 
     try:
         import folium
         from streamlit_folium import st_folium
-        folium_ok = True
+        import plotly.graph_objects as go
+        libs_ok = True
     except ImportError:
-        folium_ok = False
+        libs_ok = False
 
-    if not folium_ok:
-        st.warning("Instala las librerías del mapa: `pip install folium streamlit-folium`")
+    if not libs_ok:
+        st.warning("Instala: `pip install folium streamlit-folium plotly`")
     else:
         cats_m = art_occ["cats"]
         comunas_lista = cats_m.get("comuna", [str(i).zfill(2) for i in range(1, 11)])
+        franjas_lista = cats_m.get("franja_horaria", ["00-04","04-08","08-12","12-16","16-20","20-24"])
 
         col1, col2 = st.columns(2)
         with col1:
-            franja_m  = st.selectbox("Franja horaria", cats_m.get("franja_horaria", ["00-04","04-08","08-12","12-16","16-20","20-24"]), key="m_franja")
+            franja_m  = st.selectbox("Franja horaria (para el mapa)", franjas_lista, key="m_franja")
             mes_lbl_m = st.selectbox("Mes", list(MESES.keys()), key="m_mes")
             mes_m     = MESES[mes_lbl_m]
         with col2:
-            dias_m   = cats_m.get("dia_semana", ["lunes","martes","miércoles","jueves","viernes","sábado","domingo"])
-            dia_m    = st.selectbox("Día de la semana", dias_m, key="m_dia")
+            dias_m    = cats_m.get("dia_semana", ["lunes","martes","miércoles","jueves","viernes","sábado","domingo"])
+            dia_m     = st.selectbox("Día de la semana", dias_m, key="m_dia")
             festivo_m = st.checkbox("Día festivo", key="m_fest")
 
         with st.expander("Historial típico (aplica igual a todas las comunas)"):
@@ -250,58 +252,126 @@ with tab_mapa:
             h90c_m = st.number_input("Víctimas 90 d — comuna",          0.0, step=1.0, value=5.0, key="m_h90c")
             h365_m = st.number_input("Víctimas 365 d — comuna",         0.0, step=1.0, value=20.0, key="m_h365")
 
-        if st.button("Generar mapa", type="primary"):
-            # Predecir para cada comuna
-            resultados = []
-            for com in comunas_lista:
-                fila_m = {
-                    "hist_victimas_90d_comuna_franja": h90f_m,
-                    "hist_victimas_90d_comuna":        h90c_m,
-                    "hist_victimas_365d_comuna":       h365_m,
-                    "festivo":                         int(festivo_m),
-                    "comuna":                          com,
-                    "franja_horaria":                  franja_m,
-                    "dia_semana":                      dia_m,
-                    "mes":                             mes_m,
-                    "franja_dia":                      franja_m + "_" + dia_m,
-                }
-                prob_m = predecir(art_occ, fila_m)
-                coords = COORDS_NEIVA.get(str(com).lstrip("0") or "0",
-                          COORDS_NEIVA.get(str(com), (2.935, -75.282)))
-                resultados.append({"comuna": com, "prob": prob_m, "coords": coords})
+        if st.button("Generar visualización", type="primary"):
 
-            # Construir mapa
+            # ── Calcular matriz completa: comunas × franjas ────────────────
+            matriz = {}
+            for fr in franjas_lista:
+                col_probs = []
+                for com in comunas_lista:
+                    fila_m = {
+                        "hist_victimas_90d_comuna_franja": h90f_m,
+                        "hist_victimas_90d_comuna":        h90c_m,
+                        "hist_victimas_365d_comuna":       h365_m,
+                        "festivo":                         int(festivo_m),
+                        "comuna":                          com,
+                        "franja_horaria":                  fr,
+                        "dia_semana":                      dia_m,
+                        "mes":                             mes_m,
+                        "franja_dia":                      fr + "_" + dia_m,
+                    }
+                    col_probs.append(predecir(art_occ, fila_m))
+                matriz[fr] = col_probs
+
+            df_matriz = pd.DataFrame(matriz, index=comunas_lista)
+
+            # ── 1. GRÁFICO DE BARRAS — riesgo promedio por franja ─────────
+            st.divider()
+            st.markdown("#### Riesgo promedio por franja horaria")
+            avg_franja = df_matriz.mean(axis=0)
+            fig_bar = go.Figure(go.Bar(
+                x=avg_franja.index.tolist(),
+                y=avg_franja.values.tolist(),
+                marker_color=[color_riesgo(v) for v in avg_franja.values],
+                text=[f"{v:.1%}" for v in avg_franja.values],
+                textposition="outside",
+            ))
+            fig_bar.update_layout(
+                height=280,
+                margin=dict(t=20, b=20, l=20, r=20),
+                yaxis=dict(tickformat=".0%", range=[0, max(avg_franja.max() * 1.4, 0.05)]),
+                xaxis_title="Franja horaria",
+                yaxis_title="Probabilidad",
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
+            )
+            st.plotly_chart(fig_bar, use_container_width=True)
+
+            # ── 2. MAPA — franja seleccionada ─────────────────────────────
+            st.markdown(f"#### Mapa — franja {franja_m}")
+            probs_franja = df_matriz[franja_m]
             m = folium.Map(location=[2.935, -75.282], zoom_start=13, tiles="CartoDB positron")
 
-            for r in resultados:
-                lat, lon = r["coords"]
-                p = r["prob"]
-                col_hex = color_riesgo(p)
+            for com, p in probs_franja.items():
+                coords = COORDS_NEIVA.get(str(com).lstrip("0") or "0",
+                          COORDS_NEIVA.get(str(com), (2.935, -75.282)))
+                lat, lon = coords
+                col_hex  = color_riesgo(p)
                 clase_txt, _ = semaforo(p)
-                radio = 300 + int(p * 800)
-
                 folium.CircleMarker(
                     location=[lat, lon],
-                    radius=max(12, min(30, 12 + p * 50)),
+                    radius=max(14, min(32, 14 + p * 60)),
                     color=col_hex,
                     fill=True,
                     fill_color=col_hex,
-                    fill_opacity=0.75,
+                    fill_opacity=0.8,
                     popup=folium.Popup(
-                        f"<b>Comuna {r['comuna']}</b><br>"
-                        f"Probabilidad: {p:.1%}<br>"
-                        f"{clase_txt}",
+                        f"<b>Comuna {com}</b><br>Probabilidad: {p:.1%}<br>{clase_txt}",
                         max_width=180,
                     ),
-                    tooltip=f"Comuna {r['comuna']}: {p:.1%}",
+                    tooltip=f"C{com}: {p:.1%}",
                 ).add_to(m)
 
-            st_folium(m, width=700, height=480)
+            # Leyenda manual
+            legend_html = """
+            <div style="position:fixed;bottom:30px;left:30px;background:white;
+                        padding:10px 14px;border-radius:8px;border:1px solid #ccc;
+                        font-size:13px;z-index:1000;line-height:1.8">
+              <b>Nivel de riesgo</b><br>
+              <span style="color:#2ecc71">●</span> Bajo (&lt;10%)<br>
+              <span style="color:#f39c12">●</span> Medio (10–25%)<br>
+              <span style="color:#e74c3c">●</span> Alto (&gt;25%)
+            </div>"""
+            m.get_root().html.add_child(folium.Element(legend_html))
+            st_folium(m, width=700, height=460)
 
-            # Tabla resumen
+            # ── 3. GRILLA DE CALOR — comunas × franjas ────────────────────
             st.divider()
-            df_res = pd.DataFrame([
-                {"Comuna": r["comuna"], "Probabilidad": f"{r['prob']:.1%}", "Riesgo": semaforo(r["prob"])[0]}
-                for r in sorted(resultados, key=lambda x: -x["prob"])
-            ])
-            st.dataframe(df_res, hide_index=True, use_container_width=True)
+            st.markdown("#### Grilla de riesgo — todas las comunas y franjas")
+
+            z_vals  = df_matriz.values.tolist()
+            texts   = [[f"{v:.1%}" for v in row] for row in df_matriz.values]
+            y_labels = [f"Comuna {c}" for c in df_matriz.index]
+
+            fig_heat = go.Figure(go.Heatmap(
+                z=z_vals,
+                x=franjas_lista,
+                y=y_labels,
+                text=texts,
+                texttemplate="%{text}",
+                textfont=dict(size=12),
+                colorscale=[
+                    [0.0,  "#2ecc71"],
+                    [0.2,  "#f1c40f"],
+                    [0.5,  "#f39c12"],
+                    [1.0,  "#e74c3c"],
+                ],
+                zmin=0,
+                zmax=0.5,
+                showscale=True,
+                colorbar=dict(
+                    title="Prob.",
+                    tickformat=".0%",
+                    thickness=14,
+                ),
+            ))
+            fig_heat.update_layout(
+                height=max(300, len(comunas_lista) * 38),
+                margin=dict(t=10, b=10, l=90, r=20),
+                xaxis_title="Franja horaria",
+                yaxis_title="",
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
+            )
+            st.plotly_chart(fig_heat, use_container_width=True)
+
