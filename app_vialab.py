@@ -254,9 +254,83 @@ REGLA_NIVELES = (
 st.caption(f"Historial de siniestros con víctimas al {CORTE:%d/%m/%Y}. "
            "Las predicciones son por franja de 4 horas para preparar cada turno; no son en tiempo real.")
 
-tab_occ, tab_mapa, tab_plan, tab_sev, tab_info = st.tabs(
-    ["🗺️ Ocurrencia", "🔥 Mapa de riesgo", "📋 Plan del turno", "🚑 Severidad", "ℹ️ Cómo funciona"]
+tab_inicio, tab_occ, tab_mapa, tab_plan, tab_sev, tab_info = st.tabs(
+    ["🏠 Inicio", "🗺️ Ocurrencia", "🔥 Mapa de riesgo", "📋 Plan del turno", "🚑 Severidad", "ℹ️ Cómo funciona"]
 )
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# INICIO: PARA QUIÉN Y CUÁNDO
+# ═══════════════════════════════════════════════════════════════════════════════
+EJEMPLO_FRANJA = "16-20" if "16-20" in FRANJAS_MODELO else FRANJAS_MODELO[0]
+EJEMPLO_AGENTES, EJEMPLO_UNIDADES, EJEMPLO_ZONAS = 6, 2, 3   # mismos valores iniciales del Plan del turno
+
+def texto_franja(franja: str) -> str:
+    """«16-20» → «de 16 a 20»."""
+    a, _, b = franja.partition("-")
+    return f"de {a} a {b}" if b else franja
+
+with tab_inicio:
+    st.subheader("Para quién es VIALAB")
+    st.markdown(
+        "VIALAB ayuda a la **Secretaría de Movilidad de Neiva** a decidir dónde y cómo ubicar los operativos "
+        "preventivos de tránsito en cada turno."
+    )
+
+    col1, col2, col3 = st.columns(3)
+    with col1.container(border=True):
+        st.markdown("**¿Quién la usa?**  \nQuien programa los operativos de la Secretaría de Movilidad.")
+    with col2.container(border=True):
+        st.markdown("**¿Cuándo?**  \nAntes de cada turno, por franjas de 4 horas. No es una herramienta en tiempo real.")
+    with col3.container(border=True):
+        st.markdown("**¿Qué decide?**  \nDónde priorizar, qué acción hacer y cómo repartir agentes y unidades.")
+    st.caption("La herramienta propone y el funcionario decide.")
+
+    if METRICAS:
+        m25, m26 = METRICAS["ocurrencia"]["prueba_2025"], METRICAS["ocurrencia"]["fuera_2026"]
+        st.markdown("#### Qué valor genera")
+        st.markdown(
+            "Si la Secretaría atiende solo el **10 %** de las combinaciones de comuna y franja con mayor riesgo, "
+            f"encuentra el **{pct(m25['recall_10'], 0)}** de los casos con víctimas en 2025 y el "
+            f"**{pct(m26['recall_10'], 0)}** en 2026. Ordenando solo por el historial reciente, encuentra el "
+            f"{pct(m25['recall_10_historial'], 0)} y el {pct(m26['recall_10_historial'], 0)}."
+        )
+        v1, v2 = st.columns(2)
+        for col, anio, m in ((v1, "2025", m25), (v2, "2026 (enero a septiembre)", m26)):
+            ganancia = round(100 * m["recall_10"]) - round(100 * m["recall_10_historial"])
+            col.metric(f"Casos encontrados en {anio}", pct(m["recall_10"], 0),
+                       delta=f"{ganancia} puntos más que el historial", delta_color="normal")
+
+    st.markdown("#### Cómo se usa")
+    st.markdown(
+        "1. En **Plan del turno**, elija la fecha y la franja del turno.\n"
+        "2. Revise las comunas priorizadas, su nivel de riesgo y la acción recomendada. En **Mapa de riesgo** "
+        "puede verlas sobre la ciudad.\n"
+        "3. Indique los agentes y las unidades disponibles y descargue el plan."
+    )
+
+    if HAY_PLAN:
+        ejemplo = turno(HOY, EJEMPLO_FRANJA, es_festivo(HOY))[:EJEMPLO_ZONAS]
+        ag_ej = repartir(EJEMPLO_AGENTES, [r["p"] for r in ejemplo])
+        un_ej = repartir(EJEMPLO_UNIDADES, [r["p"] for r in ejemplo])
+        dia_ej = nombre_dia(HOY, CATS.get("dia_semana", DIAS_SEMANA))
+        st.markdown(
+            f"**Ejemplo de hoy:** {dia_ej} {HOY:%d/%m/%Y}, {texto_franja(EJEMPLO_FRANJA)}, con "
+            f"{cantidad(EJEMPLO_AGENTES, 'agente', 'agentes')} y "
+            f"{cantidad(EJEMPLO_UNIDADES, 'unidad móvil', 'unidades móviles')}."
+        )
+        st.markdown(
+            "| Prioridad | Comuna | Riesgo | Agentes | Unidades | Acción recomendada |\n|---|---|---|---|---|---|\n"
+            + "\n".join(
+                f"| {i} | {nombre_comuna(r['comuna'])} | {ADJETIVO[r['nivel']].capitalize()} | {a} | {u} | {r['accion']} |"
+                for i, (r, a, u) in enumerate(zip(ejemplo, ag_ej, un_ej), 1)
+            )
+        )
+        nota = "El ejemplo se calcula con la fecha de hoy y el mismo procedimiento del Plan del turno."
+        if (HOY - CORTE).days > 45:
+            nota += f" Usa el historial de siniestros al {CORTE:%d/%m/%Y}."
+        st.caption(nota)
+
+    st.markdown("Las métricas, los errores y los límites del sistema están en **Cómo funciona**.")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # OCURRENCIA

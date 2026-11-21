@@ -10,6 +10,7 @@ Se usa antes de cada turno; no trabaja en tiempo real. La herramienta propone y 
 
 | Pestaña | Qué hace |
 |---|---|
+| Inicio | Para quién es VIALAB, cuándo se usa, qué decide y qué valor genera, con un ejemplo del turno calculado con la fecha del día |
 | Ocurrencia | Probabilidad, nivel de riesgo y acción recomendada para una comuna, una franja y una fecha |
 | Mapa de riesgo | Mapa de las comunas, barras por franja y grilla de todas las comunas y franjas de una fecha |
 | Plan del turno | Ordena las comunas de la franja, reparte agentes y unidades y permite descargar el plan |
