@@ -10,6 +10,7 @@ Se usa antes de cada turno; no trabaja en tiempo real. La herramienta propone y 
 
 | Pestaña | Qué hace |
 |---|---|
+| Inicio | Para quién es VIALAB, cuándo se usa, qué decide y qué valor genera, con un ejemplo del turno calculado con la fecha del día |
 | Ocurrencia | Probabilidad, nivel de riesgo y acción recomendada para una comuna, una franja y una fecha |
 | Mapa de riesgo | Mapa de las comunas, barras por franja y grilla de todas las comunas y franjas de una fecha |
 | Plan del turno | Ordena las comunas de la franja, reparte agentes y unidades y permite descargar el plan |
@@ -59,5 +60,5 @@ Si se reemplaza un `.pkl`, hay que guardarlo con scikit-learn 1.6.1 o cambiar es
 - Fuente: registros de siniestros del Observatorio de la Secretaría de Movilidad de Neiva, de enero de 2020 al 20 de septiembre de 2026. Este repositorio solo tiene conteos agregados, sin datos personales.
 - Solo se usan los siniestros con víctimas. Puede haber subregistro.
 - Los umbrales de riesgo son los percentiles 70 y 90 de la probabilidad de ocurrencia en 2024, aprobados por el equipo el 19 de octubre de 2026.
-- En septiembre, noviembre y diciembre la alerta de mortalidad alta aparece en más de la mitad de las comunas y franjas. El equipo está ajustando ese umbral.
+- La señal de mortalidad usa un umbral distinto para cada mes: el percentil 75 de la probabilidad según el contexto en ese mes de 2024. Así se activa en cerca del 25 % de las comunas y franjas cada mes, en lugar de más de la mitad en septiembre, noviembre y diciembre. Es una señal de apoyo para elegir el tipo de acción; el reparto de recursos depende solo de la probabilidad de ocurrencia.
 - Límites de las comunas: © colaboradores de OpenStreetMap (ODbL).

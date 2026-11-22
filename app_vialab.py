@@ -67,6 +67,7 @@ if art_occ is None or art_sev is None or DATOS is None:
 UMB_ALTA = DATOS["umbrales"]["ocurrencia_alta"]     # percentil 90 de 2024
 UMB_MEDIA = DATOS["umbrales"]["ocurrencia_media"]   # percentil 70 de 2024
 UMB_MORT = DATOS["umbrales"].get("mortalidad_alta") # percentil 75 de 2024 (mortalidad según el contexto)
+UMB_MORT_MES = DATOS["umbrales"].get("mortalidad_alta_por_mes", {})  # percentil 75 de cada mes de 2024
 ACCIONES = DATOS.get("acciones", {})                # matriz de 6 acciones: ocurrencia × mortalidad
 CTX = DATOS.get("mortalidad_contexto")              # coeficientes de la mortalidad según el contexto
 PUNTOS = DATOS.get("puntos_criticos", [])           # sitios con 4 o más siniestros con víctimas a menos de 150 m
@@ -175,16 +176,21 @@ def mortalidad_contexto(comuna, franja, dia, mes, festivo) -> float:
          + _coef(CTX["franja"], franja) + _coef(CTX["dia"], dia) + _coef(CTX["mes"], mes))
     return 1 / (1 + math.exp(-z))
 
-def nivel_mortalidad(pm: float) -> str:
-    return "Alta" if pm >= UMB_MORT else "Normal"
+def umbral_mortalidad(mes: str) -> float:
+    """Umbral de la señal de mortalidad: el de ese mes si existe; si no, el fijo anual."""
+    return UMB_MORT_MES.get(mes, UMB_MORT)
+
+def nivel_mortalidad(pm: float, mes: str) -> str:
+    return "Alta" if pm >= umbral_mortalidad(mes) else "Normal"
 
 def accion(nivel: str, nivel_m: str) -> str:
     return ACCIONES.get(f"{nivel}|{nivel_m}", "")
 
-def texto_mortalidad(pm: float, nivel_m: str) -> str:
-    return (f"Mortalidad {'alta' if nivel_m == 'Alta' else 'normal'} para esta comuna, franja, día y mes: "
-            f"si ocurre un siniestro con víctimas, la probabilidad de que sea mortal es del {pct(pm, 0)} "
-            f"(se considera alta desde el {pct(UMB_MORT, 0)}).")
+def texto_mortalidad(pm: float, nivel_m: str, mes: str) -> str:
+    return (f"Señal de mortalidad {'alta' if nivel_m == 'Alta' else 'normal'} para esta comuna, franja, día y mes: "
+            f"si ocurre un siniestro con víctimas, la probabilidad estimada de que sea mortal es del {pct(pm)} "
+            f"(en {MESES_NOMBRE[int(mes) - 1]} la señal se activa desde el {pct(umbral_mortalidad(mes))}). "
+            "Orienta el tipo de acción, pero no cambia el reparto de recursos.")
 
 def turno(fecha: date, franja: str, festivo: bool) -> list:
     """Todas las comunas de una franja, de mayor a menor probabilidad de ocurrencia."""
@@ -197,7 +203,7 @@ def turno(fecha: date, franja: str, festivo: bool) -> list:
     for c, p in zip(comunas, probs):
         nivel = nivel_ocurrencia(p)
         pm = mortalidad_contexto(c, franja, dia, mes, festivo)
-        nivel_m = nivel_mortalidad(pm)
+        nivel_m = nivel_mortalidad(pm, mes)
         filas.append({"comuna": c, "p": float(p), "nivel": nivel, "pm": pm, "nivel_m": nivel_m,
                       "accion": accion(nivel, nivel_m)})
     return sorted(filas, key=lambda r: -r["p"])
@@ -248,9 +254,83 @@ REGLA_NIVELES = (
 st.caption(f"Historial de siniestros con víctimas al {CORTE:%d/%m/%Y}. "
            "Las predicciones son por franja de 4 horas para preparar cada turno; no son en tiempo real.")
 
-tab_occ, tab_mapa, tab_plan, tab_sev, tab_info = st.tabs(
-    ["🗺️ Ocurrencia", "🔥 Mapa de riesgo", "📋 Plan del turno", "🚑 Severidad", "ℹ️ Cómo funciona"]
+tab_inicio, tab_occ, tab_mapa, tab_plan, tab_sev, tab_info = st.tabs(
+    ["🏠 Inicio", "🗺️ Ocurrencia", "🔥 Mapa de riesgo", "📋 Plan del turno", "🚑 Severidad", "ℹ️ Cómo funciona"]
 )
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# INICIO: PARA QUIÉN Y CUÁNDO
+# ═══════════════════════════════════════════════════════════════════════════════
+EJEMPLO_FRANJA = "16-20" if "16-20" in FRANJAS_MODELO else FRANJAS_MODELO[0]
+EJEMPLO_AGENTES, EJEMPLO_UNIDADES, EJEMPLO_ZONAS = 6, 2, 3   # mismos valores iniciales del Plan del turno
+
+def texto_franja(franja: str) -> str:
+    """«16-20» → «de 16 a 20»."""
+    a, _, b = franja.partition("-")
+    return f"de {a} a {b}" if b else franja
+
+with tab_inicio:
+    st.subheader("Para quién es VIALAB")
+    st.markdown(
+        "VIALAB ayuda a la **Secretaría de Movilidad de Neiva** a decidir dónde y cómo ubicar los operativos "
+        "preventivos de tránsito en cada turno."
+    )
+
+    col1, col2, col3 = st.columns(3)
+    with col1.container(border=True):
+        st.markdown("**¿Quién la usa?**  \nQuien programa los operativos de la Secretaría de Movilidad.")
+    with col2.container(border=True):
+        st.markdown("**¿Cuándo?**  \nAntes de cada turno, por franjas de 4 horas. No es una herramienta en tiempo real.")
+    with col3.container(border=True):
+        st.markdown("**¿Qué decide?**  \nDónde priorizar, qué acción hacer y cómo repartir agentes y unidades.")
+    st.caption("La herramienta propone y el funcionario decide.")
+
+    if METRICAS:
+        m25, m26 = METRICAS["ocurrencia"]["prueba_2025"], METRICAS["ocurrencia"]["fuera_2026"]
+        st.markdown("#### Qué valor genera")
+        st.markdown(
+            "Si la Secretaría atiende solo el **10 %** de las combinaciones de comuna y franja con mayor riesgo, "
+            f"encuentra el **{pct(m25['recall_10'], 0)}** de los casos con víctimas en 2025 y el "
+            f"**{pct(m26['recall_10'], 0)}** en 2026. Ordenando solo por el historial reciente, encuentra el "
+            f"{pct(m25['recall_10_historial'], 0)} y el {pct(m26['recall_10_historial'], 0)}."
+        )
+        v1, v2 = st.columns(2)
+        for col, anio, m in ((v1, "2025", m25), (v2, "2026 (enero a septiembre)", m26)):
+            ganancia = round(100 * m["recall_10"]) - round(100 * m["recall_10_historial"])
+            col.metric(f"Casos encontrados en {anio}", pct(m["recall_10"], 0),
+                       delta=f"{ganancia} puntos más que el historial", delta_color="normal")
+
+    st.markdown("#### Cómo se usa")
+    st.markdown(
+        "1. En **Plan del turno**, elija la fecha y la franja del turno.\n"
+        "2. Revise las comunas priorizadas, su nivel de riesgo y la acción recomendada. En **Mapa de riesgo** "
+        "puede verlas sobre la ciudad.\n"
+        "3. Indique los agentes y las unidades disponibles y descargue el plan."
+    )
+
+    if HAY_PLAN:
+        ejemplo = turno(HOY, EJEMPLO_FRANJA, es_festivo(HOY))[:EJEMPLO_ZONAS]
+        ag_ej = repartir(EJEMPLO_AGENTES, [r["p"] for r in ejemplo])
+        un_ej = repartir(EJEMPLO_UNIDADES, [r["p"] for r in ejemplo])
+        dia_ej = nombre_dia(HOY, CATS.get("dia_semana", DIAS_SEMANA))
+        st.markdown(
+            f"**Ejemplo de hoy:** {dia_ej} {HOY:%d/%m/%Y}, {texto_franja(EJEMPLO_FRANJA)}, con "
+            f"{cantidad(EJEMPLO_AGENTES, 'agente', 'agentes')} y "
+            f"{cantidad(EJEMPLO_UNIDADES, 'unidad móvil', 'unidades móviles')}."
+        )
+        st.markdown(
+            "| Prioridad | Comuna | Riesgo | Agentes | Unidades | Acción recomendada |\n|---|---|---|---|---|---|\n"
+            + "\n".join(
+                f"| {i} | {nombre_comuna(r['comuna'])} | {ADJETIVO[r['nivel']].capitalize()} | {a} | {u} | {r['accion']} |"
+                for i, (r, a, u) in enumerate(zip(ejemplo, ag_ej, un_ej), 1)
+            )
+        )
+        nota = "El ejemplo se calcula con la fecha de hoy y el mismo procedimiento del Plan del turno."
+        if (HOY - CORTE).days > 45:
+            nota += f" Usa el historial de siniestros al {CORTE:%d/%m/%Y}."
+        st.caption(nota)
+
+    st.markdown("Las métricas, los errores y los límites del sistema están en **Cómo funciona**.")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # OCURRENCIA
@@ -300,9 +380,9 @@ with tab_occ:
             st.caption(f"{numero(prob / PREV)} veces el promedio de la ciudad ({pct(PREV)} por comuna y franja)")
         if HAY_PLAN:
             pm = mortalidad_contexto(comuna, franja, dia, mes, festivo)
-            nivel_m = nivel_mortalidad(pm)
+            nivel_m = nivel_mortalidad(pm, mes)
             st.markdown(f"**Acción recomendada:** {accion(nivel, nivel_m)}")
-            st.caption(texto_mortalidad(pm, nivel_m))
+            st.caption(texto_mortalidad(pm, nivel_m, mes))
         st.caption(REGLA_NIVELES)
         st.caption(f"Modelo: {art_occ['modelo']}")
 
@@ -463,11 +543,11 @@ with tab_mapa:
                 detalle = f"<b>{nombre_comuna(com)}</b><br>Probabilidad: {pct(p)}<br>Riesgo {ADJETIVO[nivel]}"
                 borde = {"color": "#34495e", "weight": 1}
                 if HAY_PLAN:
-                    nivel_m = nivel_mortalidad(mortalidad_contexto(com, franja_m, dia_m, mes_m, festivo_m))
+                    nivel_m = nivel_mortalidad(mortalidad_contexto(com, franja_m, dia_m, mes_m, festivo_m), mes_m)
                     if nivel_m == "Alta":
                         hay_mort_alta = True
-                        texto += " · mortalidad alta"
-                        detalle += "<br>Mortalidad alta"
+                        texto += " · señal de mortalidad alta"
+                        detalle += "<br>Señal de mortalidad alta"
                         borde = {"color": "#7b241c", "weight": 2.5, "dash_array": "6 4"}
                     detalle += f"<br><i>{html.escape(accion(nivel, nivel_m))}</i>"
                 for anillo in info["anillos"]:
@@ -517,7 +597,7 @@ with tab_mapa:
             # Leyenda manual
             extra = ""
             if hay_mort_alta:
-                extra += "<br><span style='color:#7b241c'>┅</span> Borde punteado: mortalidad alta"
+                extra += "<br><span style='color:#7b241c'>┅</span> Borde punteado: señal de mortalidad alta"
             if ver_puntos:
                 extra += "<br>○ Punto crítico"
             legend_html = f"""
@@ -618,7 +698,7 @@ with tab_plan:
             with st.container(border=True):
                 etiquetas = f":{COLOR_ST[nivel]}[{ICONO[nivel]} Ocurrencia {nivel.lower()} · {pct(r['p'])}]"
                 if r["nivel_m"] == "Alta":
-                    etiquetas += " · :red[Mortalidad alta]"
+                    etiquetas += " · :red[Señal de mortalidad alta]"
                 st.markdown(f"**{i}. {nombre_comuna(r['comuna'])}**  \n{etiquetas}")
                 c1, c2, c3 = st.columns([1, 1, 3])
                 c1.metric("Agentes", n_ag)
@@ -636,7 +716,7 @@ with tab_plan:
                                 f"[Ver en Google Maps]({enlace_ver(pt)}) · [Cómo llegar]({enlace_ruta(pt)})"
                             )
             lineas.append(f"{i}. {nombre_comuna(r['comuna'])}: ocurrencia {nivel.lower()} ({pct(r['p'])})"
-                          f"{', mortalidad alta' if r['nivel_m'] == 'Alta' else ''}. "
+                          f"{', señal de mortalidad alta' if r['nivel_m'] == 'Alta' else ''}. "
                           f"{cantidad(n_ag, 'agente', 'agentes')} y {cantidad(n_un, 'unidad', 'unidades')}.")
             lineas.append(f"   Acción: {r['accion']}")
             for pt in pts:
@@ -654,23 +734,33 @@ with tab_plan:
                 "Comuna": nombre_comuna(r["comuna"]),
                 "Probabilidad": pct(r["p"]),
                 "Ocurrencia": r["nivel"],
-                "Mortalidad": r["nivel_m"],
+                "Señal de mortalidad": r["nivel_m"],
                 "Acción recomendada": r["accion"],
             } for r in filas_turno]),
             hide_index=True,
         )
         st.caption("Los agentes y las unidades se reparten entre las zonas priorizadas en proporción a su "
                    "probabilidad de ocurrencia. " + REGLA_NIVELES)
+        mes_p = f"{fecha_p.month:02d}"
+        st.caption(
+            "La señal de mortalidad orienta el tipo de acción, pero no cambia el reparto de recursos. Se activa "
+            "cuando la probabilidad estimada de que un siniestro con víctimas sea mortal supera el percentil 75 de su "
+            f"mes en 2024 (en {MESES_NOMBRE[fecha_p.month - 1]}: {pct(umbral_mortalidad(mes_p))})."
+            if UMB_MORT_MES else
+            "La señal de mortalidad orienta el tipo de acción, pero no cambia el reparto de recursos. Se activa "
+            f"cuando la probabilidad estimada de que un siniestro con víctimas sea mortal supera el {pct(UMB_MORT)}."
+        )
+        if sum(r["nivel_m"] == "Alta" for r in filas_turno) >= 0.8 * len(filas_turno):
+            st.caption("En esta franja la señal sale en casi todas las comunas: en la madrugada y los fines de semana "
+                       "los siniestros con víctimas tienen más probabilidad de ser mortales en toda la ciudad.")
         meses_alerta = [MESES_NOMBRE[int(x) - 1] for x in CTX.get("meses_alerta_frecuente", [])]
         if meses_alerta:
             st.caption(
-                "La mortalidad se considera alta cuando la probabilidad de que un siniestro con víctimas sea mortal "
-                f"supera el {pct(UMB_MORT, 0)}. En {', '.join(meses_alerta[:-1])} y {meses_alerta[-1]} esa alerta "
-                "aparece en más de la mitad de las comunas y franjas; el equipo está ajustando ese umbral."
-                if len(meses_alerta) > 1 else
-                "La mortalidad se considera alta cuando la probabilidad de que un siniestro con víctimas sea mortal "
-                f"supera el {pct(UMB_MORT, 0)}. En {meses_alerta[0]} esa alerta aparece en más de la mitad de las "
+                f"En {', '.join(meses_alerta[:-1])} y {meses_alerta[-1]} la señal aparece en más de la mitad de las "
                 "comunas y franjas; el equipo está ajustando ese umbral."
+                if len(meses_alerta) > 1 else
+                f"En {meses_alerta[0]} la señal aparece en más de la mitad de las comunas y franjas; el equipo está "
+                "ajustando ese umbral."
             )
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -692,12 +782,14 @@ with tab_info:
         "- **Modelos de IA.** Una regresión logística estima la probabilidad de ocurrencia con la comuna, la "
         "franja, el día de la semana, el mes, si es festivo y el historial reciente de siniestros con víctimas "
         "(90 y 365 días). Otra estima qué tan probable es que un siniestro con víctimas sea mortal en ese mismo "
-        "contexto.\n"
+        "contexto; se muestra como una señal de apoyo para elegir el tipo de acción.\n"
         "- **Conteos históricos.** El historial que se muestra"
         + (" y los puntos críticos son conteos" if PUNTOS else " es un conteo")
         + " de los registros, no predicciones.\n"
         "- **Reglas del equipo.** Los niveles de riesgo y la acción recomendada salen de umbrales y de una "
         "matriz de seis acciones que aprobó el equipo VIALAB."
+        + (" La señal de mortalidad usa un umbral distinto para cada mes (el percentil 75 de ese mes en 2024), "
+           "para que no se active en casi todas las comunas en los meses de mayor mortalidad." if UMB_MORT_MES else "")
     )
 
     if METRICAS:
@@ -749,9 +841,13 @@ with tab_info:
         "**Sin datos de tráfico ni de operativos.** El modelo no conoce los aforos, el clima ni los controles que "
         "ya se hicieron.",
     ]
+    if HAY_PLAN:
+        limites.append("**Señal de mortalidad.** Usa solo la comuna, la franja, el día, el mes y el festivo, y su "
+                       "capacidad para anticipar qué siniestros serán mortales es baja. Por eso orienta el tipo de "
+                       "acción, pero no el reparto de recursos.")
     if meses_info:
         nombres = (", ".join(meses_info[:-1]) + " y " + meses_info[-1]) if len(meses_info) > 1 else meses_info[0]
-        limites.append(f"**Alerta de mortalidad.** En {nombres} aparece en más de la mitad de las comunas y "
+        limites.append(f"**Señal de mortalidad por mes.** En {nombres} aparece en más de la mitad de las comunas y "
                        "franjas, por el efecto del mes. El equipo está ajustando ese umbral.")
     st.markdown("#### Límites que hay que tener presentes\n" + "\n".join(f"- {x}" for x in limites))
 
